@@ -1,17 +1,12 @@
-#!/usr/bin/env pythonv
 import os
+from setuptools import setup, find_packages
+import sys
 
 __author__ = 'bresnaha'
 
-try:
-    from setuptools import setup
-except ImportError:
-    from distutils.core import setup
+Version = "1.3.1"
 
-import sys
-Version = "0.1"
-
-if float("%d.%d" % sys.version_info[:2]) < 2.5:
+if sys.version_info[:2] < (2,5):
     sys.stderr.write("Your Python version %d.%d.%d is not supported.\n" % sys.version_info[:3])
     sys.stderr.write("cloudinitd requires Python 2.5 or newer.\n")
     sys.exit(1)
@@ -33,23 +28,40 @@ def plans_list_dirs(p):
 
 basepath = os.path.dirname(__file__)
 test_plans = plans_list_dirs(os.path.join(basepath, "tests/plans"))
-print test_plans
+
+install_requires = [
+        "boto >= 2.6",
+        "sqlalchemy >= 0.7.6",
+        "fabric == 1.10",
+        "simplejson >= 2.1",
+        "apache-libcloud >= 0.17.0",
+        "uuid",
+        "PyCrypto >=2.1, <2.4"
+        ]
+
+tests_require = install_requires + [
+        'mock',
+        'nose',
+        ]
 
 setup(name='cloudinitd',
       version=Version,
       description='An Open Source bootstrap tool for services in the cloud.',
       author='Nimbus Development Team',
-      author_email='workspace-user@globus.org',
+      author_email='nimbus@mcs.anl.gov',
       url='http://www.nimbusproject.org/',
-      packages=[ 'cloudinitd', 'cloudinitd.cli', 'cloudinitd.nosetests' ],
+      packages=[ 'cloudinitd', 'cloudinitd.cli', 'cloudinitd.nosetests', 'tests' ],
        entry_points = {
         'console_scripts': [
             'cloudinitd = cloudinitd.cli.boot:main',
         ],
 
       },
+      include_package_data = True,
+      data_files = test_plans,
+      package_data = {},
+      download_url ="http://www.nimbusproject.org/downloads/cloudinitd-%s.tar.gz" % (Version),
       keywords = "cloud boot tool initialize services",
-      data_files=test_plans,
       long_description="""
 This package can be considered the /etc/rc.d of the cloud!
 
@@ -59,8 +71,11 @@ means launching and configuring all of the VMs needed for each service in the le
 booted and ready to go, booting begins on level 2.
 """,
       license="Apache2",
-      install_requires = ["boto >= 1.9", "sqlalchemy >= 0.6", "fabric == 0.9.4"],
-
+      install_requires = install_requires,
+      tests_require=tests_require,
+      extras_require={
+          'test': tests_require,
+      },
       classifiers=[
           'Development Status :: 4 - Beta',
           'Environment :: Console',

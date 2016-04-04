@@ -4,7 +4,7 @@ from cloudinitd.user_api import CloudInitD
 import tempfile
 import logging
 
-__author__ = 'bresnaha'
+
 
 import unittest
 import os
@@ -13,6 +13,9 @@ class PlanTests(unittest.TestCase):
 
     def setUp(self):
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir
+
+    def tearDown(self):
+        cloudinitd.close_log_handlers()
 
     def test_lotsonlevel(self):
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir

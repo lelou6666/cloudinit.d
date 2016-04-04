@@ -2,7 +2,7 @@ import traceback
 import sys
 import os
 
-__author__ = 'bresnaha'
+
 
 class CloudInitDException(Exception):
     def __init__(self, ex):
@@ -56,11 +56,18 @@ class ServiceException(PollableException):
 
     def __str__(self):
         s = "Error while processing the service: %s" % (self._svc.name)
+        return s
+
+    def get_output(self):
+        s = ""
         if self.msg:
             s = s + os.linesep + self.msg
-        s = s + os.linesep + "stdout : %s" % (self.stdout)
-        s = s + os.linesep + "stderr : %s" % (self.stderr)
-        s = s + os.linesep + str(self._base_ex)
+        try:
+            s = s + os.linesep + "stdout : %s" % (str(self.stdout))
+            s = s + os.linesep + "stderr : %s" % (str(self.stderr))
+            s = s + os.linesep + str(self._base_ex)
+        except Exception, ex:
+            s = str(s)
         return s
 
 class ProcessException(PollableException):

@@ -3,10 +3,13 @@ import uuid
 import cloudinitd
 from cloudinitd.pollables import *
 
-__author__ = 'bresnaha'
+
 
 
 class PollableTests(unittest.TestCase):
+
+    def tearDown(self):
+        cloudinitd.close_log_handlers()
 
     def test_popen_fail(self):
         cmd = "/bin/false"
@@ -43,7 +46,7 @@ class PollableTests(unittest.TestCase):
         self.assertTrue(rc)
 
     def test_popen_true(self):
-        cmd = "/bin/true"
+        cmd = cloudinitd.find_true()
         pexe = PopenExecutablePollable(cmd, allowed_errors=0)
         pexe.start()
         rc = pexe.poll()
@@ -91,7 +94,7 @@ class PollableTests(unittest.TestCase):
         self.assertFalse(failed)
 
     def test_multilevel_simple(self):
-        cmd = "/bin/true"
+        cmd = cloudinitd.find_true()
         pexe1_1 = PopenExecutablePollable(cmd, allowed_errors=0)
         pexe1_2 = PopenExecutablePollable(cmd, allowed_errors=0)
         pexe2_1 = PopenExecutablePollable(cmd, allowed_errors=0)
@@ -108,7 +111,7 @@ class PollableTests(unittest.TestCase):
             rc = mcp.poll()
 
     def test_multilevel_error(self):
-        cmd = "/bin/true"
+        cmd = cloudinitd.find_true()
         pexe1_1 = PopenExecutablePollable(cmd, allowed_errors=0, timeout=60)
         pexe1_2 = PopenExecutablePollable(cmd, allowed_errors=0, timeout=60)
         pexe2_1 = PopenExecutablePollable(cmd, allowed_errors=0, timeout=60)
@@ -130,7 +133,7 @@ class PollableTests(unittest.TestCase):
 
 
     def test_popen_cancel(self):
-        cmd = "/bin/sleep 10000000"
+        cmd = "/bin/sleep 100000"
         pexe1_1 = PopenExecutablePollable(cmd, allowed_errors=0)
 
         pexe1_1.start()

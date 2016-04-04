@@ -1,7 +1,7 @@
 import os
 from cloudinitd.exceptions import ConfigException, CloudInitDException, APIUsageException, IaaSException, IaaSException, MultilevelException, ServiceException
 
-__author__ = 'bresnaha'
+
 
 import uuid
 import unittest
@@ -14,6 +14,9 @@ class FakeSvc(object):
         self.name = n
 
 class BasicUnitTests(unittest.TestCase):
+
+    def tearDown(self):
+        cloudinitd.close_log_handlers()
 
     def test_logging(self):
         cloudinitd.log(logging, logging.DEBUG, "testmessage")
@@ -40,7 +43,7 @@ class BasicUnitTests(unittest.TestCase):
         self.assertEqual(msg, str(ex))
         ex = IaaSException(Exception("test"))
         print ex
-        ex = MultilevelException([ex], [ex], 5)                
+        ex = MultilevelException([ex], [ex], 5)
         print ex
         fakesvc = FakeSvc("name")
         ex = ServiceException(Exception("tester"), fakesvc, msg="msg")

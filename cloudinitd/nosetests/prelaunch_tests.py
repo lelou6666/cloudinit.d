@@ -5,28 +5,33 @@ from cloudinitd.user_api import CloudInitD
 import tempfile
 import logging
 
-__author__ = 'bresnaha'
+
 
 import unittest
 import os
 
-class BasicUserAPITests(unittest.TestCase):
+class PrelaunchTests(unittest.TestCase):
 
     def setUp(self):
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir
+
+    def tearDown(self):
+        cloudinitd.close_log_handlers()
 
     def test_prelaunch(self):
 
         key = None
         secret = None
+        url = None
         try:
-            key = os.environ['CLOUDBOOT_IAAS_ACCESS_KEY']
-            secret = os.environ['CLOUDBOOT_IAAS_SECRET_KEY']
+            key = os.environ['CLOUDINITD_IAAS_ACCESS_KEY']
+            secret = os.environ['CLOUDINITD_IAAS_SECRET_KEY']
+            url = os.environ['CLOUDINITD_IAAS_URL']
         except:
             pass
 
         # XXX this test may fail for nimbus
-        con = cloudinitd.cb_iaas.iaas_get_con(key, secret)
+        con = cloudinitd.cb_iaas.iaas_get_con(None, key=key, secret=secret, iaasurl=url)
         i_list = con.get_all_instances()
         conf_file = "multilevelsimple"
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir

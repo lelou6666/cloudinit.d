@@ -7,12 +7,15 @@ from cloudinitd.user_api import CloudInitD
 import tempfile
 import os
 
-__author__ = 'bresnaha'
+
 
 
 class InstanceDiesTests(unittest.TestCase):
     def setUp(self):
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir
+
+    def tearDown(self):
+        cloudinitd.close_log_handlers()
 
     def _start_one(self, conf_file):
 
@@ -54,7 +57,7 @@ class InstanceDiesTests(unittest.TestCase):
         h = svc.get_attr_from_bag("hostname")
         print h
         self._terminate(dir, cb.run_name)
-        
+
     def test_getlevels(self):
         tst_name = "multilevelsimple"
         (dir, cb) = self._start_one(tst_name)
