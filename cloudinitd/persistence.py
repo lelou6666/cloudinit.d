@@ -12,11 +12,26 @@ import ConfigParser
 from sqlalchemy import types
 from datetime import datetime
 import os
+
 import cloudinitd
 from cloudinitd.exceptions import APIUsageException
+from cloudinitd.global_deps import set_global_var, global_merge_down
 
 
 metadata = MetaData()
+
+
+def config_get_or_none_bool(parser, s, v, default=None):
+    try:
+        x = parser.get(s, v)
+        if not x:
+            return x
+        x = cloudinitd.get_env_val(x)
+
+        x = x.lower() == "true"
+        return x
+    except:
+        return default
 
 
 def config_get_or_none(parser, s, v, default=None):
@@ -66,13 +81,14 @@ service_table = Table('service', metadata,
     Column('instance_id', String(64)),
     Column('iaas_url', String(64)),
     Column('iaas_key', String(64)),
-    Column('iaas_secret', String(64)),    
+    Column('iaas_secret', String(64)),
     Column('state', Integer, default=0),
     Column('last_error', sqlalchemy.types.Text()),
     Column('terminatepgm', String(1024)),
     Column('terminatepgm_args', String(1024), default=""),
     Column('iaas_launch', Boolean),
     Column('pgm_timeout', Integer, default=1200),
+    Column('local_exe', Boolean, default=False),
     )
 
 attrbag_table = Table('attrbag', metadata,
@@ -116,6 +132,17 @@ def _resolve_file_or_none(context_dir, conf, conf_file, has_args=False):
                         "referenced in the file '%s'." % (path, conf_file))
     return path
 
+
+def _load_globals_from_config(config_parser):
+        # load global variables
+        if config_parser.has_section("globals"):
+            for key, val in config_parser.items("globals"):
+                # globals from top level config get "rank" 1 --
+                # overridden by command line files and args
+                set_global_var(key, val, 1)
+            global_merge_down()
+
+
 class BootObject(object):
 
     def __init__(self, topconf):
@@ -157,6 +184,7 @@ class ServiceObject(object):
         self.terminatepgm = None
         self.terminatepgm_args = ""
         self.pgm_timeout = None
+        self.local_exe = None
         self.instance_id = None
         self.iaas_url = None
         self.iaas_key = None
@@ -189,6 +217,9 @@ class ServiceObject(object):
         terminatepgm_args = config_get_or_none(parser, section, "terminatepgm_args", self.terminatepgm_args)
 
         pgm_timeout = config_get_or_none(parser, section, "pgm_timeout", self.pgm_timeout)
+
+        local_exe = config_get_or_none_bool(parser, section, "local_exe", self.local_exe)
+
 
         allo = config_get_or_none(parser, section, "allocation", self.allocation)
         image = config_get_or_none(parser, section, "image", self.image)
@@ -256,7 +287,10 @@ class ServiceObject(object):
             terminatepgm_args = db.default_terminatepgm_args
         if not pgm_timeout:
             pgm_timeout = db.default_pgm_timeout
-            
+
+        if not local_exe:
+            local_exe = db.default_local_exe
+
 
         self.image = image
         self.bootconf = _resolve_file_or_none(conf_dir, bootconf, conf_file)
@@ -265,6 +299,7 @@ class ServiceObject(object):
         self.terminatepgm = _resolve_file_or_none(conf_dir, terminatepgm, conf_file, has_args=True)
         self.terminatepgm_args = terminatepgm_args
         self.pgm_timeout = pgm_timeout
+        self.local_exe = local_exe
 
         self.hostname = hostname
         self.readypgm = _resolve_file_or_none(conf_dir, readypgm, conf_file, has_args=True)
@@ -313,12 +348,12 @@ class ServiceObject(object):
                 keys_val = parser2.items("deps")
                 for (ka,val) in keys_val:
                     val2 = config_get_or_none(parser2, "deps", ka)
-                    if val2:
+                    if val2 is not None:
                         bao = BagAttrsObject(ka, val2)
                         self.attrs.append(bao)
-            
 
-                
+
+
 class BagAttrsObject(object):
     def __init__(self, key, value):
         self.key = key
@@ -369,7 +404,6 @@ class CloudInitDDB(object):
         self._Session = sessionmaker(bind=self._engine)
         self._session = self._Session()
 
-
     def db_obj_add(self, obj):
         self._session.add(obj)
 
@@ -378,6 +412,11 @@ class CloudInitDDB(object):
 
     def load_from_db(self):
         bo = self._session.query(BootObject).first()
+
+        # need to re-read topconf to get globals. should these go to DB instead?
+        parser = ConfigParser.ConfigParser()
+        parser.read(bo.topconf)
+        _load_globals_from_config(parser)
         return bo
 
     def load_from_conf(self, conf_file):
@@ -415,6 +454,7 @@ class CloudInitDDB(object):
         self.default_terminatepgm = config_get_or_none(parser, s, "terminatepgm")
         self.default_terminatepgm_args = config_get_or_none(parser, s, "terminatepgm_args")
         self.default_pgm_timeout = config_get_or_none(parser, s, "pgm_timeout")
+        self.default_local_exe = config_get_or_none_bool(parser, s, "local_exe")
 
         all_sections = parser.sections()
         for s in all_sections:
@@ -422,7 +462,8 @@ class CloudInitDDB(object):
             if ndx == 0:
                 cloudconf = CloudConfSection(parser, s)
                 self._cloudconf_sections[s] = cloudconf
-        
+
+        _load_globals_from_config(parser)
 
         lvl_dict = {}
         levels = parser.items("runlevels")
@@ -455,7 +496,7 @@ class CloudInitDDB(object):
         self.bo = bo
         return bo
 
-    
+
     def build_level(self, level_name, level_file):
         parser = ConfigParser.ConfigParser()
         parser.read(level_file)

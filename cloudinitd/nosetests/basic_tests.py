@@ -2,10 +2,6 @@ import cloudinitd
 import cloudinitd.nosetests
 from cloudinitd.user_api import CloudInitD
 import tempfile
-import logging
-
-
-
 import unittest
 import os
 
@@ -34,7 +30,7 @@ class BasicUserAPITests(unittest.TestCase):
     def test_lotsonlevel(self):
         tst_name = "lotsonlevel"
         self._start_one(tst_name)
-        
+
     def test_multileveldeps(self):
         tst_name = "multileveldeps"
         self._start_one(tst_name)
@@ -57,6 +53,10 @@ class BasicUserAPITests(unittest.TestCase):
 
     def test_cloudconf(self):
         tst_name = "cloudconf"
+        self._start_one(tst_name)
+
+    def test_localexe(self):
+        tst_name = "localhostexe"
         self._start_one(tst_name)
 
 if __name__ == '__main__':

@@ -16,32 +16,36 @@ def _iftar(filename):
     else:
         return None
 
-def _tartask(directory, basename, tarball):
+def _tartask(directory, basename, tarball, run_pgm=run):
     """Expand the tarball, ensure it contains a directory with the basename.
     Ensure run.sh exists inside.
     Return path to the run.sh file.
     """
     with cd(directory):
-        run("tar -xvzf %s" % tarball)
+        run_pgm("tar -xvzf %s" % tarball)
     tardir = os.path.join(directory, basename)
     try:
-        run("test -d %s" % tardir)
+        run_pgm("test -d %s" % tardir)
     except:
         raise Exception("The tarball does not expand to a directory of the same name: %s" % tardir)
     destpgm = os.path.join(tardir, "run.sh")
     try:
-        run("test -f %s" % destpgm)
+        run_pgm("test -f %s" % destpgm)
     except:
         raise Exception("The tarball does contain a 'run.sh' file: %s" % tarball)
 
     # In case they forgot:
-    run("chmod +x %s" % destpgm)
-    
+    run_pgm("chmod +x %s" % destpgm)
+
     return destpgm
 
-def _make_ssh(pgm, args=""):
+def _make_ssh(pgm, args="", local_exe=None):
 
-    ssh_opts = "-A -n -T -o BatchMode=yes -o StrictHostKeyChecking=no -o PasswordAuthentication=no"
+    if local_exe:
+        cmd = "%s %s" % (pgm, args)
+        return cmd
+
+    ssh_opts = "-A -n -T -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o PasswordAuthentication=no"
     try:
         if 'CLOUDINITD_SSH_OPTS' in os.environ:
             ssh_opts = os.environ['CLOUDINITD_SSH_OPTS']
@@ -66,58 +70,92 @@ def _make_ssh(pgm, args=""):
     if env.key_filename and env.key_filename[0]:
         key = "-i " + env.key_filename[0]
 
-    cmd = "%s %s %s %s %s%s %s %s" % (sshexec, port, ssh_opts, key, user, env.host, pgm, args)
+    cmd = "%s %s %s %s %s%s '%s %s'" % (sshexec, port, ssh_opts, key, user, env.host, pgm, args)
 
     return cmd
 
 
-def readypgm(pgm=None, args=None, stagedir=None):
+def readypgm(pgm=None, args=None, stagedir=None, local_exe=None):
+    local_exe = str(local_exe).lower() == 'true'
+    pgm_to_use = run
+    put_pgm = put
+    if local_exe:
+        pgm_to_use = local
+        put_pgm = shutil.copy
+
     args = urllib.unquote(args)
     env.warn_only = True
-    run('mkdir -p %s' % stagedir)
+    pgm_to_use('mkdir -p %s' % stagedir)
     relpgm = os.path.basename(pgm)
     destpgm = "%s/%s" % (stagedir, relpgm)
-    put(pgm, destpgm, mode=0755)
+
+    if local_exe:
+        os.chdir(stagedir)
+        put_pgm(pgm, destpgm)
+        os.chmod(destpgm, 0755)
+    else:
+        put_pgm(pgm, destpgm, mode=0755)
+
     tarname = _iftar(relpgm)
     if tarname:
          destpgm = _tartask(stagedir, tarname, destpgm)
     env.warn_only = False
     destpgm = destpgm + " " + args
     with cd(stagedir):
-        run(destpgm)
+        pgm_to_use(destpgm)
 
-def cleanup_dirs(stagedir=None):
-    shutil.rmtree(stagedir, ignore_errors=True)
+def cleanup_dirs(stagedir=None, local_exe=None):
+    cmd = _make_ssh("rm -rf %s" %(stagedir), local_exe=local_exe)
+    local(cmd)
 
-def bootpgm(pgm=None, args=None, conf=None, env_conf=None, output=None, stagedir=None, remotedir=None):
+
+def bootpgm(pgm=None, args=None, conf=None, env_conf=None, output=None, stagedir=None, remotedir=None, local_exe=None):
+    local_exe = str(local_exe).lower() == 'true'
+    pgm_to_use = run
+    put_pgm = put
+    if local_exe:
+        pgm_to_use = local
+        put_pgm = shutil.copy
+
     args = urllib.unquote(args)
-    run('mkdir %s;chmod 777 %s' % (remotedir, remotedir))
-    run('mkdir -p %s' % stagedir)
+    pgm_to_use('mkdir %s;chmod 777 %s' % (remotedir, remotedir))
+    pgm_to_use('mkdir -p %s' % stagedir)
     relpgm = os.path.basename(pgm)
     destpgm = "%s/%s" % (stagedir, relpgm)
-    put(pgm, destpgm, mode=0755)
+    if local_exe:
+        os.chdir(stagedir)
+        put_pgm(pgm, destpgm)
+        os.chmod(destpgm, 0755)
+    else:
+        put_pgm(pgm, destpgm, mode=0755)
     tarname = _iftar(relpgm)
     if tarname:
-        destpgm = _tartask(stagedir, tarname, destpgm)
+        destpgm = _tartask(stagedir, tarname, destpgm, run_pgm=pgm_to_use)
     if conf and conf != "None":
         destconf = "%s/bootconf.json" % stagedir
-        put(conf, destconf)
+        put_pgm(conf, destconf)
+        os.remove(conf)
     if env_conf and env_conf != "None":
         destenv = "%s/bootenv.sh" % stagedir
-        put(env_conf, destenv)
+        put_pgm(env_conf, destenv)
+        os.remove(env_conf)
     destpgm = destpgm + " " + args
 
-    local_cmd = _make_ssh("'cd %s;%s'" %(stagedir, destpgm))
+    local_cmd = _make_ssh("cd %s;%s" %(stagedir, destpgm), local_exe=local_exe)
     if local_cmd:
         local(local_cmd)
 
     with cd(stagedir):
         #run(destpgm)
         try:
-            fetch_conf(output=output, stagedir=stagedir)
+            fetch_conf(output=output, stagedir=stagedir, local_exe=local_exe)
         except:
             pass
 
-def fetch_conf(output=None, stagedir=None):
+def fetch_conf(output=None, stagedir=None, local_exe=None):
     remote_output = "%s/bootout.json" % (stagedir)
-    get(remote_output, output) 
+
+    if local_exe:
+        shutil.copy(remote_output, output)
+    else:
+        get(remote_output, output)

@@ -1,7 +1,7 @@
 import warnings
 warnings.simplefilter('ignore')
 
-from datetime import timedelta
+import os
 import datetime
 import threading
 import uuid
@@ -17,6 +17,13 @@ except ImportError:
     from libcloud.compute.providers import get_driver
     from libcloud.compute.base import NodeImage, NodeAuthSSHKey
 
+if os.environ.get('CLOUDINITD_NO_LIBCLOUD_VERIFY_SSL_CERT'):
+    import libcloud.security
+    libcloud.security.VERIFY_SSL_CERT = False
+
+from urlparse import urlparse
+from datetime import timedelta
+
 import boto.ec2
 #warnings.simplefilter('default')
 
@@ -24,7 +31,6 @@ try:
     from boto.regioninfo import RegionInfo
 except:
     from boto.ec2.regioninfo import RegionInfo
-import os
 import cloudinitd
 from cloudinitd.exceptions import ConfigException, IaaSException, APIUsageException
 
@@ -67,24 +73,23 @@ class IaaSBotoConn(object):
     def __init__(self, svc, key, secret, iaasurl, iaas):
         self._svc = svc
 
-        if not iaas:
-            iaas = "us-east-1"
-
         if not iaasurl:
+            if not iaas:
+                iaas = "us-east-1"
             region = boto.ec2.get_region(iaas, aws_access_key_id=key, aws_secret_access_key=secret)
             if not region:
                 raise ConfigException("The 'iaas' configuration '%s' does not specify a valid boto EC2 region." % iaas)
-            self._con =  boto.connect_ec2(key, secret, region=region)
+            self._con =  boto.connect_ec2(key, secret, region=region, validate_certs=False)
         else:
             (scheme, iaashost, iaasport, iaaspath) = cloudinitd.parse_url(iaasurl)
-            region = RegionInfo(iaashost)
+            region = RegionInfo(endpoint=iaashost, name=iaas)
 
             secure = scheme == "https"
 
             if not iaasport:
-                self._con =  boto.connect_ec2(key, secret, region=region, path=iaaspath, is_secure=secure)
+                self._con =  boto.connect_ec2(key, secret, region=region, path=iaaspath, is_secure=secure, validate_certs=False)
             else:
-                self._con =  boto.connect_ec2(key, secret, port=iaasport, region=region, path=iaaspath, is_secure=secure)
+                self._con =  boto.connect_ec2(key, secret, port=iaasport, region=region, path=iaaspath, is_secure=secure, validate_certs=False)
             self._con.host = iaashost
 
     def get_all_instances(self, instance_ids=None):
@@ -118,9 +123,12 @@ class IaaSBotoConn(object):
 
         sec_group = None
         if security_groupname:
-             sec_group_a = self._con.get_all_security_groups(groupnames=[security_groupname,])
-             if sec_group_a:
-                 sec_group = sec_group_a
+            try:
+                sec_group_a  = self._con.get_all_security_groups(groupnames=[security_groupname,])
+                if sec_group_a:
+                    sec_group = sec_group_a
+            except Exception, boto_ex:
+                sec_group = None
 
         reservation = self._con.run_instances(image, instance_type=instance_type, key_name=key_name, security_groups=sec_group)
         instance = reservation.instances[0]
@@ -148,7 +156,7 @@ class IaaSBotoConn(object):
         return i
 
 class IaaSLibCloudConn(object):
-    
+
     def __init__(self, svc, key, secret, iaasurl, iaas):
         #cloudinitd.log(log, logging.INFO, "loading up a lobcloud driver %s" % (iaas))
         self._svc = svc
@@ -182,6 +190,7 @@ class IaaSLibCloudConn(object):
             "rackspace_uk": Provider.RACKSPACE_UK,
             "brightbox": Provider.BRIGHTBOX,
             "cloudsigma": Provider.CLOUDSIGMA,
+            "nimbus": Provider.NIMBUS,
             }
 
 
@@ -197,8 +206,20 @@ class IaaSLibCloudConn(object):
                 provider = self._provider_lookup[self._iaas]
             else:
                 raise ConfigException("%s is not a known libcloud driver" % (self._iaas))
+
+        if provider == Provider.NIMBUS and not iaasurl:
+            raise ConfigException("You must provide an IAAS URL to the Nimbus libcloud driver")
+
         self._Driver = get_driver(provider)
-        self._con = self._Driver(key, secret)
+
+        if iaasurl is not None:
+            url = urlparse(iaasurl)
+            host = url.hostname
+            port = url.port
+
+            self._con = self._Driver(key, secret, host=host, port=port)
+        else:
+            self._con = self._Driver(key, secret)
 
     def find_instance(self, instance_id):
         i_a = self.get_all_instances([instance_id,])
@@ -414,15 +435,13 @@ def iaas_get_con(svc, key=None, secret=None, iaasurl=None, iaas=None):
             iaasurl = svc.get_dep("iaas_url")
         if not iaas:
             iaas = svc.get_dep("iaas")
-    if not iaas:
-        iaas = "us-east-1"
 
     # pick the connection driver
     ConDriver = IaaSBotoConn
-    ndx = iaas.find("libcloud-")
-    if ndx == 0:
-        ConDriver = IaaSLibCloudConn
-        pass
+    if iaas:
+        ndx = iaas.find("libcloud-")
+        if ndx == 0:
+            ConDriver = IaaSLibCloudConn
 
     global g_lock
 

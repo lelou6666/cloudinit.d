@@ -35,6 +35,8 @@ class Pollable(object):
         self._timeout = timeout
         self._exception = None
         self._done_cb = done_cb
+        self._end_time = None
+        self._start_time = None
 
     def get_exception(self):
         return self._exception
@@ -43,6 +45,7 @@ class Pollable(object):
         self._start_time = datetime.datetime.now()
 
     def _execute_done_cb(self):
+        self._end_time = datetime.datetime.now()
         if not self._done_cb:
             return
         self._done_cb(self)
@@ -59,6 +62,11 @@ class Pollable(object):
             self._exception = TimeoutException("pollable %s timedout at %d seconds" % (str(self), self._timeout))
             raise self._exception
         return False
+
+    def get_runtime(self):
+        if not self._end_time:
+            return None
+        return self._end_time - self._start_time
 
 class NullPollable(Pollable):
 
@@ -131,6 +139,9 @@ class PortPollable(Pollable):
 
         if 'CLOUDINITD_TESTENV' in os.environ:
             return True
+
+        Pollable.poll(self)
+
         now = datetime.datetime.now()
         if self._last_run:
             if now - self._last_run < self._time_delay:
@@ -150,7 +161,7 @@ class PortPollable(Pollable):
                 cloudinitd.log(self._log, logging.ERROR, "safety error count exceeded" + str(ex), tb=traceback)
                 raise
             cloudinitd.log(self._log, logging.INFO, "Retry %d for %s:%d" % (self._poll_error_count, self._host, self._port))
-            
+
             return False
 
     def cancel(self):
@@ -185,6 +196,7 @@ class InstanceHostnamePollable(Pollable):
             if self._svc:
                 # this is for historical records in the database
                 self._svc.new_iaas_instance(self._instance)
+
 
     def start(self):
         self.pre_start()
@@ -251,13 +263,14 @@ class InstanceHostnamePollable(Pollable):
         done = False
         while not self._done and not done:
             try:
-                # because update is called in start we will sleep first
-                time.sleep(poll_period)
-                self._update()
-                cloudinitd.log(self._log, logging.DEBUG, "Current iaas state in thread for %s is %s" % (self.get_instance_id(), self._instance.get_state()))
                 if self._instance.get_state() not in self._ok_states:
                     cloudinitd.log(self._log, logging.DEBUG, "%s polling thread done" % (self.get_instance_id()))
                     done = True
+                # because update is called in start we will sleep first
+                else:
+                    time.sleep(poll_period)
+                    self._update()
+                    cloudinitd.log(self._log, logging.DEBUG, "Current iaas state in thread for %s is %s" % (self.get_instance_id(), self._instance.get_state()))
             except Exception, ex:
                 cloudinitd.log(self._log, logging.ERROR, str(ex), tb=traceback)
                 self.exception = IaaSException(ex)
@@ -309,7 +322,7 @@ class PopenExecutablePollable(Pollable):
         if self._exception:
             raise self._exception
         if not self._started:
-            raise APIUsageException("You must call start before calling poll.")        
+            raise APIUsageException("You must call start before calling poll.")
         if self._done:
             return True
         # check timeout here
@@ -356,9 +369,8 @@ class PopenExecutablePollable(Pollable):
             if self._error_count >= self._allowed_errors:
                 ex = Exception("Process exceeded the allowed number of failures %d with %d: %s" % (self._allowed_errors, self._error_count, self._cmd))
                 raise ProcessException(ex, self._stdout_str, self._stderr_str, rc)
-            self._last_run = datetime.datetime.now()     
+            self._last_run = datetime.datetime.now()
             return False
-        self._final_rc = rc
         self._done = True
         self._execute_cb(cloudinitd.callback_action_complete, "Pollable complete")
         self._execute_done_cb()
@@ -391,7 +403,7 @@ class PopenExecutablePollable(Pollable):
 
             if f == p.stdout:
                 # we assume there will be a full line or eof
-                # not the fastest str concat, but this is small                
+                # not the fastest str concat, but this is small
                 self._stdout_str = self._stdout_str + line
                 if not line:
                     self._stdout_eof = True
@@ -408,7 +420,7 @@ class PopenExecutablePollable(Pollable):
 
     def _run(self):
         cloudinitd.log(self._log, logging.DEBUG, "running the command %s" % (str(self._cmd)))
-        self._p = subprocess.Popen(self._cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        self._p = subprocess.Popen(self._cmd, shell=True, stdin=open(os.devnull), stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
 
     def get_command(self):
         return self._cmd
@@ -422,6 +434,7 @@ class MultiLevelPollable(Pollable):
     def __init__(self, log=logging, timeout=0, callback=None, continue_on_error=False):
         Pollable.__init__(self, timeout)
         self.levels = []
+        self.level_times = []
         self.level_ndx = -1
         self._log = log
         self._timeout = timeout
@@ -436,6 +449,7 @@ class MultiLevelPollable(Pollable):
         self._reversed = False
         self.last_exception = None
         self._canceled = False
+        self._current_level_start = None
 
     def get_level(self):
         return self.level_ndx + 1
@@ -453,14 +467,16 @@ class MultiLevelPollable(Pollable):
                 p.pre_start()
 
     def start(self):
-        Pollable.start(self)        
+        Pollable.start(self)
         if self.level_ndx >= 0:
             return
+
+        self._current_level_start_time = datetime.datetime.now()
         self.level_ndx = 0
         if len(self.levels) == 0:
             return
         self._start()
-        
+
     def _start(self):
         self._execute_cb(cloudinitd.callback_action_started, self._get_callback_level())
         for p in self.levels[self.level_ndx]:
@@ -520,6 +536,11 @@ class MultiLevelPollable(Pollable):
                 self._level_error_polls = []
                 self._level_error_ex = []
 
+            _current_level_end_time = datetime.datetime.now()
+            self.level_times.append(_current_level_end_time - self._current_level_start_time)
+            self._current_level_start_time = datetime.datetime.now()
+
+
             self._execute_cb(cb_action, self._get_callback_level())
             self.level_ndx = self.level_ndx + 1
 
@@ -535,7 +556,10 @@ class MultiLevelPollable(Pollable):
         if not self._callback:
             return
         self._callback(self, action, lvl+1)
-            
+
+    def get_level_times(self):
+        return self.level_times
+
     #def cancel(self):
     # table this for now
     #    """
@@ -562,7 +586,7 @@ class MultiLevelPollable(Pollable):
             lvl = self.levels[i]
             for p in lvl:
                 p.cancel()
-                
+
         self._canceled = True
 
 
@@ -571,7 +595,7 @@ class ValidationPollable(Pollable):
     def __init__(self, svc, timeout=600, done_cb=None):
         Pollable.__init__(self, timeout, done_cb=done_cb)
         self._svc = svc
-        
+
 
     def start(self):
         Pollable.start(self)

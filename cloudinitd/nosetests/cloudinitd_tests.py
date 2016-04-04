@@ -45,7 +45,7 @@ class CloudInitDTests(unittest.TestCase):
             file.close()
 
     def _dump_output(self, filename):
-        file = open(filename, "r")  
+        file = open(filename, "r")
         print file.readlines()
         file.close()
 
@@ -66,6 +66,21 @@ class CloudInitDTests(unittest.TestCase):
         rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
         self.assertEqual(rc, 0)
 
+    def test_terminate_variable(self):
+        (osf, outfile) = tempfile.mkstemp()
+        os.close(osf)
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "boot",  "%s/terminate_variable/top.conf" % (self.plan_basedir)])
+        self._dump_output(outfile)
+        self.assertEqual(rc, 0)
+
+        n = "Starting up run"
+        line = self._find_str(outfile, n)
+        self.assertNotEqual(line, None)
+        runname = line[len(n):].strip()
+        print "run name is %s" % (runname)
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
+        self.assertEqual(rc, 0)
+
     def test_list_commands(self):
         (osf, outfile) = tempfile.mkstemp()
         os.close(osf)
@@ -76,7 +91,7 @@ class CloudInitDTests(unittest.TestCase):
         (osf, outfile) = tempfile.mkstemp()
         os.close(osf)
         rc = cloudinitd.cli.boot.main(["--help"])
-        self.assertEqual(rc, 0)        
+        self.assertEqual(rc, 0)
 
     def test_basic_validate(self):
         (osf, outfile) = tempfile.mkstemp()
@@ -118,7 +133,7 @@ class CloudInitDTests(unittest.TestCase):
         runname = self._get_runname(outfile)
         rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
         self.assertEqual(rc, 0)
-        
+
     def test_reload(self):
 
         if 'CLOUDINITD_TESTENV' in os.environ:
@@ -294,7 +309,7 @@ class CloudInitDTests(unittest.TestCase):
         rc = cloudinitd.cli.boot.main(["-O", outfile, "history", runname])
         self._dump_output(outfile)
         self.assertEqual(rc, 0)
-        
+
         rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
         self.assertEqual(rc, 0)
 
@@ -392,7 +407,11 @@ class CloudInitDTests(unittest.TestCase):
         self.assertNotEqual(line, None)
 
         rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
-        self.assertEqual(rc, 0)
+        if 'CLOUDINITD_TESTENV' in os.environ:
+            # in fake mode we cannot detect that an instance was killed
+            self.assertEqual(rc, 0)
+        else:
+            self.assertNotEqual(rc, 0)
 
     def check_repair_error_test(self):
         if 'CLOUDINITD_TESTENV' in os.environ:
@@ -509,3 +528,41 @@ class CloudInitDTests(unittest.TestCase):
         line = self._find_str(outfile, "ERROR")
         self.assertNotEqual(line, None)
 
+
+    def test_globals_success(self):
+        (osf, outfile) = tempfile.mkstemp()
+        os.close(osf)
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "--globalvar", "var1=world", "boot",  "%s/globals/top.conf" % (self.plan_basedir)])
+        self._dump_output(outfile)
+        self.assertEqual(rc, 0)
+
+        runname = self._get_runname(outfile)
+
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "--globalvar", "var1=world", "terminate",  "%s" % (runname)])
+        self.assertEqual(rc, 0)
+
+    def test_globals_fail(self):
+        (osf, outfile) = tempfile.mkstemp()
+        os.close(osf)
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "boot",  "%s/globals/top.conf" % (self.plan_basedir)])
+        self._dump_output(outfile)
+        self.assertNotEqual(rc, 0)
+
+        runname = self._get_runname(outfile)
+
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
+        line = self._find_str(outfile, "global variable var1 is not")
+        self.assertNotEqual(line, None)
+
+    def test_globals_file_success(self):
+        (osf, outfile) = tempfile.mkstemp()
+        os.close(osf)
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "--globalvarfile", "%s/globals/globals.ini" % (self.plan_basedir), "boot",  "%s/globals/top.conf" % (self.plan_basedir)])
+
+        self._dump_output(outfile)
+        self.assertEqual(rc, 0)
+
+        runname = self._get_runname(outfile)
+
+        rc = cloudinitd.cli.boot.main(["-O", outfile, "--globalvar", "var1=world", "terminate",  "%s" % (runname)])
+        self.assertEqual(rc, 0)

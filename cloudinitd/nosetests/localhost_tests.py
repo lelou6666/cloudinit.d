@@ -12,9 +12,21 @@ import cloudinitd.cli.boot
 class CloudInitDLocalhostTests(unittest.TestCase):
 
     def setUp(self):
+        self._test_fab = None
+        self._test_ssh = None
+        if 'CLOUDINITD_SSH' in os.environ:
+            self._test_ssh = os.environ['CLOUDINITD_SSH']
+            del os.environ['CLOUDINITD_SSH']
+        if 'CLOUDINITD_FAB' in os.environ:
+            self._test_fab = os.environ['CLOUDINITD_FAB']
+            del os.environ['CLOUDINITD_FAB']
         self.plan_basedir = cloudinitd.nosetests.g_plans_dir
 
     def tearDown(self):
+        if self._test_fab:
+            os.environ['CLOUDINITD_FAB'] = self._test_fab
+        if self._test_ssh:
+            os.environ['CLOUDINITD_SSH'] = self._test_ssh
         cloudinitd.close_log_handlers()
 
     def _find_str(self, filename, needle):
@@ -38,7 +50,7 @@ class CloudInitDLocalhostTests(unittest.TestCase):
         file.close()
 
     def _tst_local_host(self):
-        cmd = "ssh  -n -T -o BatchMode=yes -o StrictHostKeyChecking=no -o PasswordAuthentication=no localhost /bin/true"
+        cmd = "ssh  -n -T -o BatchMode=yes -o StrictHostKeyChecking=no -o PasswordAuthentication=no localhost true"
         rc = os.system(cmd)
         if rc != 0:
             raise SkipTest()
@@ -86,8 +98,11 @@ class CloudInitDLocalhostTests(unittest.TestCase):
 
         (osf, outfile) = tempfile.mkstemp()
         os.close(osf)
-        rc = cloudinitd.cli.boot.main(["-O", outfile, "boot",  "%s/localhost_to/boot_to_top.conf" % (self.plan_basedir)])
+        rc = cloudinitd.cli.boot.main(["-vvv", "-O", outfile, "boot",  "%s/localhost_to/boot_to_top.conf" % (self.plan_basedir)])
+        #cmd = "/home/bresnaha/pycharmVE/bin/cloudinitd -l debug -vvv -O %s boot %s/localhost_to/boot_to_top.conf" % (outfile, self.plan_basedir)
+        #rc = os.system(cmd)
         self._dump_output(outfile)
+        print rc
 
         try:
             n = "Starting up run"
@@ -123,7 +138,7 @@ class CloudInitDLocalhostTests(unittest.TestCase):
         start = datetime.now()
         rc = cloudinitd.cli.boot.main(["-O", outfile, "terminate",  "%s" % (runname)])
         end = datetime.now()
-        self.assertEqual(rc, 0, "terminate will return 0 unless something crazy bad happens")
+        self.assertNotEqual(rc, 0, "terminate now will return non 0 values")
 
         diff = end - start
         self.assertLess(diff.seconds, 50)

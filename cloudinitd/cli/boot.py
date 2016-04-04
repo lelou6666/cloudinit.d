@@ -1,13 +1,15 @@
-#!/usr/bin/env python
+
 from datetime import datetime
 
 import sys
 from optparse import OptionParser
 import uuid
 import stat
+import logging
 from cloudinitd.cli.cmd_opts import bootOpts
+from cloudinitd.global_deps import set_global_var, set_global_var_file, global_merge_down
 from cloudinitd.user_api import CloudInitD, CloudServiceException
-from cloudinitd.exceptions import MultilevelException, APIUsageException, ConfigException
+from cloudinitd.exceptions import MultilevelException, APIUsageException, ConfigException, ServiceException
 import cloudinitd
 import os
 import cloudinitd.cli.output
@@ -22,6 +24,26 @@ g_repair = False
 g_outfile = None
 g_commands = {}
 g_options = None # just a lame way to thread info to callbacks.
+
+def _return_key_val(var_str):
+    l_a = var_str.split("=", 1)
+    if len(l_a) != 2:
+        raise Exception("Invalid global variable string.  It must be in the format <key>=<value>")
+    return l_a
+
+def _deal_with_cmd_line_globals(options):
+    if options.globalvar:
+        for var_str in options.globalvar:
+            (key, value) = _return_key_val(var_str)
+            set_global_var(key, value, 3)
+
+    if options.globalvarfile:
+        for filename in options.globalvarfile:
+            set_global_var_file(filename, 2)
+
+    # if we add this to the conf file that will go on rank 1
+    global_merge_down()
+
 
 def print_chars(lvl, msg, color="default", bg_color="default", bold=False, underline=False, inverse=False):
     global g_outfile
@@ -65,7 +87,13 @@ Run with the command 'commands' to see a list of all possible commands
     opt = bootOpts("loglevel", "l", "Controls the level of detail in the log file", "info", vals=["debug", "info", "warn", "error"])
     opt.add_opt(parser)
     all_opts.append(opt)
+    opt = bootOpts("logstack", "s", "Log stack trace information (extreme debug level)", False, flag=True)
+    opt.add_opt(parser)
+    all_opts.append(opt)
     opt = bootOpts("noclean", "c", "Do not delete the database, only relevant for the terminate command", False, flag=True)
+    opt.add_opt(parser)
+    all_opts.append(opt)
+    opt = bootOpts("safeclean", "C", "Do not delete the database on failed terminate, only relevant for the terminate command", False, flag=True)
     opt.add_opt(parser)
     all_opts.append(opt)
     opt = bootOpts("kill", "k", "This option only applies to the iceage command.  When on it will terminate all VMs started with IaaS associated with this run to date.  This should be considered an extreme measure to prevent IaaS resource leaks.", False, flag=True)
@@ -80,6 +108,13 @@ Run with the command 'commands' to see a list of all possible commands
     opt = bootOpts("output", "o", "Create an json document which describes the application and write it to the associated file.  Relevant for boot and status", None)
     opt.add_opt(parser)
     all_opts.append(opt)
+    opt = bootOpts("globalvar", "g", "Add a variable to global variable space", None, append_list=True)
+    opt.add_opt(parser)
+    all_opts.append(opt)
+    opt = bootOpts("globalvarfile", "G", "Add a file to global variable space", None, append_list=True)
+    opt.add_opt(parser)
+    all_opts.append(opt)
+
 
     homedir = os.path.expanduser("~/.cloudinitd")
     try:
@@ -88,8 +123,10 @@ Run with the command 'commands' to see a list of all possible commands
             os.chmod(homedir, stat.S_IWUSR | stat.S_IXUSR | stat.S_IRUSR)
     except Exception, ex:
         print_chars(0, "Error creating cloudinit.d directort %s : %s" % (homedir, str(ex)))
-        
+
     (options, args) = parser.parse_args(args=argv)
+
+    _deal_with_cmd_line_globals(options)
 
     for opt in all_opts:
         opt.validate(options)
@@ -104,6 +141,24 @@ Run with the command 'commands' to see a list of all possible commands
     if not options.database:
         dbdir = os.path.expanduser("~/.cloudinitd")
         options.database = dbdir
+
+    if options.logstack:
+        logger = logging.getLogger("stacktracelog")
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        logdir = os.path.join(options.logdir, options.name)
+        if not os.path.exists(logdir):
+            try:
+                os.mkdir(logdir)
+            except OSError:
+                pass
+        stacklogfile = os.path.join(logdir, "stacktrace.log")
+        handler = logging.handlers.RotatingFileHandler(stacklogfile, maxBytes=100*1024*1024, backupCount=5)
+        logger.addHandler(handler)
+        fmt = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        formatter = logging.Formatter(fmt)
+        handler.setFormatter(formatter)
+
 
     if options.quiet:
         options.verbose = 0
@@ -133,6 +188,15 @@ Run with the command 'commands' to see a list of all possible commands
     g_options = options
     return (args, options)
 
+def friendly_timedelta(td):
+    if td is None:
+        s = None
+    else:
+        s = (td.microseconds + (td.seconds + td.days * 24 * 3600) * float(10**6)) / float(10**6)
+    if s < 0:
+        s = 0
+    return "%.1fs" % s
+
 def level_callback(cb, action, current_level):
     global g_action
 
@@ -142,14 +206,18 @@ def level_callback(cb, action, current_level):
         #print_chars(1, ".")
         pass
     elif action == cloudinitd.callback_action_complete:
+        runtime_str = friendly_timedelta(cb.get_level_runtime(current_level))
         print_chars(1, "SUCCESS", color="green", bold=True)
-        print_chars(1, " level %d\n" % (current_level))
+        print_chars(1, " level %d" % (current_level))
+        print_chars(4, " (%s)" % runtime_str)
+        print_chars(1, "\n")
+
     elif action == cloudinitd.callback_action_error:
         print_chars(1, "Level %d ERROR.\n" % (current_level), color="red", bold=True)
 
 def service_callback(cb, cloudservice, action, msg):
     global g_action
-    
+
     if action == cloudinitd.callback_action_started:
         print_chars(3, "\t%s\n" % (msg))
 
@@ -159,8 +227,11 @@ def service_callback(cb, cloudservice, action, msg):
     elif action == cloudinitd.callback_action_transition:
         print_chars(5, "\t%s\n" % (msg))
     elif action == cloudinitd.callback_action_complete:
+
+        runtime_str = friendly_timedelta(cloudservice.get_runtime())
         print_chars(2, "\tSUCCESS", color="green")
-        print_chars(2, " service %s %s\n" % (cloudservice.name, g_action))
+        print_chars(2, " service %s %s" % (cloudservice.name, g_action))
+        print_chars(2, " (%s)\n" % runtime_str)
         print_chars(4, "\t\thostname: %s\n" % (cloudservice.get_attr_from_bag("hostname")))
         print_chars(4, "\t\tinstance: %s\n" % (cloudservice.get_attr_from_bag("instance_id")))
 
@@ -174,16 +245,16 @@ def service_callback(cb, cloudservice, action, msg):
 
 def reload_conf(options, args):
     """
-    Reload the configuration into this runs data base.  This is typically followed by a repair
+    Reload an updated launch plan configuration into the database of the run name supplied with --name.  This is typically followed by a repair of the same run name.
     """
     if len(args) < 2:
-        print "The boot command requires a top level file.  See --help"
+        print "The reload command requires a top level file.  See --help"
         return 1
 
     config_file = args[1]
     print_chars(1, "Loading the launch plan for run ")
     print_chars(1, "%s\n" % (options.name), inverse=True, color="green", bold=True)
-    cb = CloudInitD(options.database, log_level=options.loglevel, db_name=options.name, config_file=config_file, level_callback=level_callback, service_callback=service_callback, logdir=options.logdir, fail_if_db_present=False, terminate=False, boot=False, ready=False, repair=True)
+    cb = CloudInitD(options.database, log_level=options.loglevel, db_name=options.name, config_file=config_file, level_callback=level_callback, service_callback=service_callback, logdir=options.logdir, fail_if_db_present=False, terminate=False, boot=False, ready=False)
     if options.validate:
         print_chars(1, "Validating the launch plan.\n")
         errors = cb.boot_validate()
@@ -268,7 +339,7 @@ def launch_new(options, args):
                 if not os.path.exists(path):
                     raise Exception("That DB does not seem to exist: %s" % (path))
                 os.remove(path)
-            
+
         return rc
 
     (rc, cb) = _launch_new(options, args, cb)
@@ -295,11 +366,14 @@ def _launch_new(options, args, cb):
     finally:
         fake_args = ["clean", options.name]
         clean_ice(options, fake_args)
-        
+
+    rc = 0
     ex = cb.get_exception()
     if ex is None:
-        rc = 0
-    else:
+        ex_list = cb.get_all_exceptions()
+        if ex_list:
+            ex = ex_list[-1]
+    if ex:
         print_chars(4, "An error occured %s" % (str(ex)))
         rc = 1
 
@@ -343,15 +417,21 @@ def _status(options, args):
         fake_args = ["clean", dbname]
         clean_ice(options, fake_args)
 
-    ex = cb.get_exception()
-    if ex is None:
-        rc = 0
+    rc = 0
+    if g_repair:
+        ex = cb.get_last_exception()
     else:
+        ex = cb.get_exception()
+        if ex is None:
+            ex_list = cb.get_all_exceptions()
+            if ex_list:
+                ex = ex_list[-1]
+    if ex:
         print_chars(4, "An error occured %s" % (str(ex)))
         rc = 1
 
     _write_json_doc(options, cb)
-    
+
     return rc
 
 def terminate(options, args):
@@ -361,7 +441,7 @@ def terminate(options, args):
     if len(args) < 2:
         print "The terminate command requires a run name.  See --help"
         return 1
-    
+
     for dbname in args[1:]:
         options.name = dbname
         rc = 0
@@ -373,12 +453,21 @@ def terminate(options, args):
             cb.block_until_complete(poll_period=0.1)
             if not options.noclean:
                 path = "%s/cloudinitd-%s.db" % (options.database, dbname)
-                print_chars(1, "deleting the db file %s\n" % (path))
                 if not os.path.exists(path):
                     raise Exception("That DB does not seem to exist: %s" % (path))
-                os.remove(path)
+                if not options.safeclean or (cb.get_exception() is None and not cb.get_all_exceptions()):
+                    print_chars(1, "Deleting the db file %s\n" % (path))
+                    os.remove(path)
+                else:
+                    print_chars(4, "There were errors when terminating %s, keeping db\n" % (cb.run_name))
+
             ex = cb.get_exception()
+            if ex is None:
+                ex_list = cb.get_all_exceptions()
+                if ex_list:
+                    ex = ex_list[-1]
             if ex is not None:
+                print_chars(4, "An error occured %s" % (str(ex)))
                 raise ex
         except CloudServiceException, svcex:
             print svcex
@@ -428,7 +517,7 @@ def reboot(options, args):
 
 def list_commands(options, args):
     """
-    List all of the possible plans accepted by this program.
+    List all of the possible commands accepted by this program.
     """
     line_len = 60
     global g_commands
@@ -573,7 +662,6 @@ def main(argv=sys.argv[1:]):
     try:
         try:
             rc = func(options, args)
-            print ""
         except SystemExit:
             raise
         except APIUsageException, apiex:
@@ -592,6 +680,17 @@ def main(argv=sys.argv[1:]):
             print_chars(0,  " for more details\n")
             print_chars(0,  "Check your launch plan and associated environment variables for the above listed errors.\n")
             options.logger.error("A configuration error occured.  Please check your launch plan and its associated environment variables")
+            rc = 1
+        except ServiceException, ex:
+            print_chars(0, str(ex))
+            if g_verbose > 2:
+                print_chars(2, ex.get_output())
+                print_chars(2, "\n")
+            print_chars(0, "see ")
+            print_chars(0, "%s" % (options.logdir), inverse=True, color="red")
+            print_chars(0,  " for more details\n")
+            if options.verbose > 1:
+                raise
             rc = 1
         except Exception, ex:
             print_chars(0, str(ex))
